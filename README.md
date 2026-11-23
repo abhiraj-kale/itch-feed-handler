@@ -11,6 +11,8 @@ It comes with a UDP replay server that can drop packets on purpose, a synthetic 
 
 Header-only core, no dependencies beyond the standard library and the OS socket API.
 
+**Live demo: [itch-feed-handler.vercel.app](https://itch-feed-handler.vercel.app)**
+
 **Interactive demo:** the same handler compiled to WebAssembly, running behind a simulated network you can break (packet loss, duplicates, reordering). It shows gap requests and retransmits on an animated wire, live books for the most active symbols, a byte-level message inspector, and an in-browser benchmark. Source in [`demo/`](demo).
 
 ## Results
