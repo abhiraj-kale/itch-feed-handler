@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ITCH Feed Handler</title>
+  <meta name="description" content="A C++20 Nasdaq ITCH 5.0 feed handler compiled to WebAssembly: MoldUDP64 gap recovery over a lossy network, zero-copy parsing, and per-symbol books, live in your browser." />
+  <meta property="og:title" content="ITCH 5.0 Feed Handler" />
+  <meta property="og:description" content="Zero-copy ITCH parser at 264M msgs/s, MoldUDP64 gap recovery, exact books over a lossy network. Running live via WebAssembly." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230b0f17'/><rect x='4' y='14' width='6' height='5' rx='1.5' fill='%2339d0e6'/><rect x='13' y='14' width='6' height='5' rx='1.5' fill='%2339d0e6' opacity='.6'/><rect x='22' y='14' width='6' height='5' rx='1.5' fill='%23ffc163'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="itch.css" />
+</head>
+<body>
+  <nav class="nav">
+    <a class="brand" href="#top"><span class="brand-mark itch-mark"></span>itch<span class="dim">::</span>FeedHandler</a>
+    <div class="nav-links">
+      <a href="#live">Live feed</a>
+      <a href="#inspect">Inspector</a>
+      <a href="#bench">Benchmark</a>
+      <a href="#inside">Inside</a>
+      <a class="gh" href="https://github.com/abhiraj-kale/itch-feed-handler" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero" id="top">
+    <canvas id="hero-canvas" aria-hidden="true"></canvas>
+    <div class="hero-inner">
+      <div class="pill reveal"><span class="dot live-dot"></span> C++20 feed handler running in your browser via WebAssembly</div>
+      <h1 class="reveal">Nasdaq ITCH 5.0<br /><span class="grad">feed handler</span></h1>
+      <p class="lede reveal">Market data arrives as millions of tiny binary messages over UDP, where packets get lost. This handler reads them in place without copying, notices every missing packet, asks for it again, and rebuilds every stock's order book exactly.</p>
+      <div class="hero-cta reveal">
+        <a class="btn primary" href="#live">Break the network</a>
+        <a class="btn ghost" href="#inspect">Inspect a message</a>
+      </div>
+      <div class="hero-stats reveal">
+        <div class="stat"><div class="num" data-count="264" data-suffix="M">0</div><div class="lbl">msgs/s parsed, one core</div></div>
+        <div class="stat"><div class="num" data-count="3.8" data-decimals="1" data-suffix=" ns">0</div><div class="lbl">per message, framing + dispatch</div></div>
+        <div class="stat"><div class="num" data-count="15.9" data-decimals="1" data-suffix="M">0</div><div class="lbl">msgs/s with full book rebuild</div></div>
+        <div class="stat"><div class="num" data-count="0">0</div><div class="lbl">messages lost at 0.5% packet loss</div></div>
+      </div>
+    </div>
+    <a class="scroll-hint" href="#live" aria-label="Scroll to live feed"><span></span></a>
+  </header>
+
+  <!-- LIVE -->
+  <section class="section" id="live">
+    <div class="section-head reveal">
+      <span class="kicker">01 / Live</span>
+      <h2>Lossy network, exact book</h2>
+      <p>A synthetic trading session is packed into MoldUDP64 packets and pushed through a network you control. Drop packets, duplicate them, deliver them out of order. The handler detects every gap from sequence numbers, requests a retransmission, and keeps rebuilding the books. A second book fed without any loss checks the result.</p>
+    </div>
+
+    <div class="terminal reveal">
+      <div class="term-bar">
+        <div class="term-dots"><i></i><i></i><i></i></div>
+        <div class="term-title">MoldUDP64 session WEBDEMO001 &middot; <span id="sess-size">--</span></div>
+        <div class="term-status"><span class="dot live-dot" id="status-dot"></span><span id="status-text">loading engine</span></div>
+      </div>
+
+      <div class="wire-wrap">
+        <div class="wire-label left"><b>Exchange</b><span>replay + retransmit server</span></div>
+        <canvas id="wire"></canvas>
+        <div class="wire-label right"><b>Feed handler</b><span>session &rarr; parser &rarr; books</span></div>
+        <div class="wire-legend">
+          <span class="wl live">packet</span><span class="wl drop">dropped</span><span class="wl req">gap request</span><span class="wl retx">retransmit</span><span class="wl dup">duplicate</span><span class="wl late">out of order</span>
+        </div>
+      </div>
+
+      <div class="itch-grid">
+        <aside class="panel side">
+          <div class="progress">
+            <div class="control-row"><span>Messages delivered in order</span><output id="prog-out">0 / 0</output></div>
+            <div class="bar-track"><div class="bar-fill" id="prog"></div><div class="bar-gap" id="prog-gap"></div></div>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><span>Packets</span><b id="k-packets">0</b></div>
+            <div class="kpi"><span>Gaps found</span><b id="k-gaps">0</b></div>
+            <div class="kpi"><span>Requests</span><b id="k-req">0</b></div>
+            <div class="kpi"><span>Recovered msgs</span><b id="k-rec">0</b></div>
+            <div class="kpi"><span>Dupes ignored</span><b id="k-dup">0</b></div>
+            <div class="kpi"><span>Live orders</span><b id="k-live">0</b></div>
+          </div>
+          <div class="verify" id="verify"><span class="v-icon"></span><div><b id="v-title">Waiting</b><span id="v-sub">Book vs lossless replay</span></div></div>
+
+          <div class="control">
+            <div class="control-row"><label for="speed">Packet rate</label><output id="speed-out">60 / s</output></div>
+            <input type="range" id="speed" min="0" max="100" value="35" />
+          </div>
+          <div class="control">
+            <div class="control-row"><label for="loss">Packet loss</label><output id="loss-out">2.0%</output></div>
+            <input type="range" id="loss" min="0" max="100" value="20" />
+          </div>
+          <div class="control">
+            <div class="control-row"><label for="dup">Duplicates</label><output id="dup-out">1.0%</output></div>
+            <input type="range" id="dup" min="0" max="100" value="10" />
+          </div>
+          <div class="control">
+            <div class="control-row"><label for="reorder">Out of order</label><output id="reorder-out">1.0%</output></div>
+            <input type="range" id="reorder" min="0" max="100" value="10" />
+          </div>
+          <div class="chips">
+            <button class="chip" id="turbo">Turbo</button>
+            <button class="chip" id="pause">Pause</button>
+            <button class="chip" id="restart">New session</button>
+          </div>
+        </aside>
+
+        <div class="panel center">
+          <div class="board-head"><h3>Top of book</h3><span class="dim">10 most active symbols &middot; click one</span></div>
+          <div class="board" id="board">
+            <div class="brow head"><span>Symbol</span><span>Bid size</span><span>Bid</span><span>Ask</span><span>Ask size</span><span>Spread</span><span>Msgs</span></div>
+          </div>
+          <div class="mix">
+            <div class="board-head"><h3>Message mix</h3><span class="dim" id="mix-total">0 messages</span></div>
+            <div class="mix-bars" id="mix"></div>
+          </div>
+        </div>
+
+        <aside class="panel depth-panel">
+          <div class="board-head"><h3 id="depth-title">Depth</h3><span class="dim">8 levels</span></div>
+          <div class="ladder small" id="ladder">
+            <div class="ladder-head"><span>Price</span><span>Shares</span><span>Orders</span></div>
+            <div class="ladder-side asks" id="asks"></div>
+            <div class="spread-row"><span id="mid">--</span><span class="spread-lbl" id="spread-lbl">spread --</span></div>
+            <div class="ladder-side bids" id="bids"></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- INSPECTOR -->
+  <section class="section" id="inspect">
+    <div class="section-head reveal">
+      <span class="kicker">02 / Zero copy</span>
+      <h2>Read the bytes where they land</h2>
+      <p>Every ITCH message is a fixed-size big-endian record. The parser never copies or converts a message up front: it hands the handler a pointer, and each field is decoded only when it is read. This is the most recent order message from the live feed above. Hover a field.</p>
+    </div>
+    <div class="card inspector reveal">
+      <div class="insp-head">
+        <div><span class="insp-type" id="insp-type">--</span><span class="dim" id="insp-seq"></span></div>
+        <button class="chip" id="insp-freeze">Freeze</button>
+      </div>
+      <div class="hex" id="hex"></div>
+      <div class="fields" id="fields"></div>
+    </div>
+  </section>
+
+  <!-- BENCH -->
+  <section class="section" id="bench">
+    <div class="section-head reveal">
+      <span class="kicker">03 / Benchmark</span>
+      <h2>Nanoseconds per message</h2>
+      <p>Measured on a 20 million message session held in memory. Framing and dispatch is the cost of walking the stream and switching on the type. Full decode reads every field. The book rebuild applies every add, execute, cancel, delete, and replace to per-symbol books.</p>
+    </div>
+    <div class="bench-grid">
+      <div class="card reveal">
+        <div class="card-head"><h3>Native</h3><span class="tag">i7-8565U &middot; g++ -O3 &middot; pinned core</span></div>
+        <div class="bars">
+          <div class="bar-group">
+            <div class="bar-label">Throughput <span class="dim">M msgs/s, higher is better</span></div>
+            <div class="bar-row wide"><span class="who">framing</span><div class="track"><div class="fill fast" data-w="264" data-max="264"></div></div><b>264</b></div>
+            <div class="bar-row wide"><span class="who">full decode</span><div class="track"><div class="fill fast" data-w="104" data-max="264"></div></div><b>104</b></div>
+            <div class="bar-row wide"><span class="who">+ book rebuild</span><div class="track"><div class="fill fast" data-w="15.9" data-max="264"></div></div><b>15.9</b></div>
+          </div>
+          <div class="bar-group">
+            <div class="bar-label">Book rebuild latency <span class="dim">ns per message</span></div>
+            <div class="bar-row wide"><span class="who">p50</span><div class="track"><div class="fill fast" data-w="59" data-max="400"></div></div><b>59</b></div>
+            <div class="bar-row wide"><span class="who">p99</span><div class="track"><div class="fill fast" data-w="159" data-max="400"></div></div><b>159</b></div>
+            <div class="bar-row wide"><span class="who">p99.9</span><div class="track"><div class="fill slow" data-w="350" data-max="400"></div></div><b>350</b></div>
+          </div>
+        </div>
+        <p class="fine">Synthetic session with a Nasdaq-like message mix, 500 symbols. A real full-day file has many more live orders, so expect the book rebuild to be slower on real data.</p>
+      </div>
+      <div class="card reveal">
+        <div class="card-head"><h3>In your browser</h3><span class="tag">WebAssembly &middot; single thread</span></div>
+        <div class="run-box">
+          <span class="dim" id="bench-size">session not loaded</span>
+          <button class="btn primary run" id="run-bench" disabled>Load engine...</button>
+        </div>
+        <div class="bars">
+          <div class="bar-group">
+            <div class="bar-label">Throughput <span class="dim">M msgs/s in this tab</span></div>
+            <div class="bar-row wide"><span class="who">framing</span><div class="track"><div class="fill fast" id="wb-frame"></div></div><b id="wv-frame">--</b></div>
+            <div class="bar-row wide"><span class="who">+ book rebuild</span><div class="track"><div class="fill fast" id="wb-book"></div></div><b id="wv-book">--</b></div>
+          </div>
+        </div>
+        <div class="verdict" id="verdict">Runs the same parser and book builder over the session generated for the live demo.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INSIDE -->
+  <section class="section" id="inside">
+    <div class="section-head reveal">
+      <span class="kicker">04 / Inside</span>
+      <h2>From a UDP packet to a strategy</h2>
+      <p>Two threads. The network thread owns the socket, the sequencing, the parser, and the books. Top-of-book changes go to the strategy thread through a lock-free ring, so a slow strategy can never stall the feed.</p>
+    </div>
+    <div class="pipe reveal" id="pipe">
+      <div class="stage"><b>UDP socket</b><span>multicast join, 64 MB receive buffer</span></div>
+      <div class="stage"><b>MoldUDP64 session</b><span>sequence check, park future packets, request gaps</span></div>
+      <div class="stage"><b>Zero-copy parser</b><span>length-prefixed views, switch on type</span></div>
+      <div class="stage"><b>Book builder</b><span>order table + per-symbol levels</span></div>
+      <div class="stage"><b>SPSC ring</b><span>top-of-book updates, never blocks</span></div>
+      <div class="stage"><b>Strategy thread</b><span>pinned to its own core</span></div>
+      <div class="pipe-dot"></div>
+    </div>
+    <div class="inside-grid four">
+      <article class="card reveal"><h3>Gap recovery</h3><p>Each packet carries the sequence number of its first message. A packet from the future is parked, the missing range is requested from the retransmission server, and parked packets are released the moment the hole is filled. Duplicates and overlaps are trimmed message by message.</p></article>
+      <article class="card reveal"><h3>Prefetching ahead</h3><p>The order table is the one structure too big for cache. The parser looks 8 messages ahead and prefetches the hash slot each upcoming execute, cancel, delete, or replace will touch, so the memory fetch overlaps with useful work.</p></article>
+      <article class="card reveal"><h3>Flat order table</h3><p>Live orders sit inline in an open-addressing table keyed by order reference: 24-byte records, linear probing, and backward-shift deletion so constant add and delete churn never leaves tombstones behind.</p></article>
+      <article class="card reveal"><h3>Levels with the best at the back</h3><p>Each side of each book is a sorted vector with the best price last. Most updates land within a few levels of the touch, and a level that empties below the touch is kept for reuse instead of shifting the vector.</p></article>
+    </div>
+    <div class="card proof reveal">
+      <div class="proof-num"><span data-count="0">0</span><small>unknown order refs</small></div>
+      <div class="proof-text">
+        <h3>Checked against a reference, symbol by symbol</h3>
+        <p>Tests replay 900k messages through the book builder and a plain <code>std::map</code> book and compare the full depth of every symbol. Another test feeds MoldUDP64 packets with loss, duplicates, reordering, and a retransmission server that also loses answers, and requires every message delivered exactly once, in order. End to end over real UDP multicast, the book rebuilt from a feed with 0.5% packet loss matches the book built from the file.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div>Built by <a href="https://github.com/abhiraj-kale" target="_blank" rel="noopener">Abhiraj Kale</a>. C++20, compiled to WebAssembly with Emscripten. Synthetic data, not a real trading session.</div>
+    <a class="btn ghost small" href="https://github.com/abhiraj-kale/itch-feed-handler" target="_blank" rel="noopener">View the source</a>
+  </footer>
+
+  <script src="itch.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

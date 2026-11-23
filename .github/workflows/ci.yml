@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+      - name: Build
+        run: cmake --build build
+      - name: Unit, differential, and recovery tests
+        run: ./build/itch_tests
+      - name: End to end over UDP with 0.5% packet loss
+        run: |
+          ./build/itch_gen session.itch 1000000 200
+          ./build/feed_handler --listen 127.0.0.1:31000 --request 127.0.0.1:31001 --verify session.itch --idle 15 > fh.log 2>&1 &
+          FH=$!
+          sleep 1
+          ./build/itch_replay session.itch --dest 127.0.0.1:31000 --req-port 31001 --rate 300000 --drop 0.005 --linger 3
+          wait $FH
+          cat fh.log
+          grep -q "MATCHES" fh.log
+      - name: Parser benchmark (smoke run, shared runner, numbers not meaningful)
+        run: ./build/bench_parse --gen 2000000 200 0

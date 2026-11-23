@@ -1,0 +1,38 @@
+cmake_minimum_required(VERSION 3.20)
+project(itch_feed_handler LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+find_package(Threads REQUIRED)
+
+add_library(itch INTERFACE)
+target_include_directories(itch INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(itch INTERFACE Threads::Threads)
+if(WIN32)
+  target_link_libraries(itch INTERFACE ws2_32)
+endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(itch INTERFACE -Wall -Wextra -Wpedantic $<$<CONFIG:Release>:-O3 -march=native>)
+endif()
+
+set(TARGETS feed_handler itch_replay itch_gen bench_parse itch_tests)
+add_executable(feed_handler src/feed_handler.cpp)
+add_executable(itch_replay tools/itch_replay.cpp)
+add_executable(itch_gen tools/itch_gen.cpp)
+add_executable(bench_parse bench/bench_parse.cpp)
+add_executable(itch_tests tests/test_main.cpp)
+foreach(t ${TARGETS})
+  target_link_libraries(${t} PRIVATE itch)
+  if(MINGW)
+    target_link_options(${t} PRIVATE -static)
+  endif()
+endforeach()
+
+enable_testing()
+add_test(NAME itch_tests COMMAND itch_tests)
