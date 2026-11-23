@@ -67,6 +67,84 @@ void line(const char* name, std::uint64_t msgs, std::size_t bytes, double secs) 
               secs * 1e9 / static_cast<double>(msgs), static_cast<double>(bytes) / secs / 1e9);
 }
 
+// Captures too big for RAM (a full Nasdaq day is ~12 GB): read 1 GB at a time,
+// time only the parsing (never the disk), keep one book across chunks, and
+// record per-message latency in a histogram instead of a sample vector.
+int stream_bench(const char* path, int cpu) {
+  std::FILE* f = std::fopen(path, "rb");
+  if (!f) { std::fprintf(stderr, "cannot read %s\n", path); return 1; }
+  const bool pinned = pin_thread(cpu);
+  const double tsc_per_ns = calibrate_tsc_per_ns();
+  const std::uint64_t overhead = measure_tsc_overhead();
+  const std::size_t CHUNK = std::size_t{1} << 30;
+  std::vector<char> buf(CHUNK + 65536);
+  auto book = std::make_unique<BookBuilder<>>();
+  auto lat_book = std::make_unique<BookBuilder<>>();
+  constexpr std::size_t HB = 1 << 16;  // histogram buckets in TSC ticks; last one is overflow
+  std::vector<std::uint64_t> hist(HB, 0);
+  double t_frame = 0, t_decode = 0, t_book = 0;
+  std::uint64_t msgs = 0, bytes = 0, errors = 0, sink = 0;
+  std::size_t have = 0;
+  using clk = std::chrono::steady_clock;
+  for (;;) {
+    const std::size_t got = std::fread(buf.data() + have, 1, CHUNK, f);
+    if (got == 0) break;
+    have += got;
+    { TouchOne h; const auto t0 = clk::now(); parse_stream(buf.data(), have, h); t_frame += std::chrono::duration<double>(clk::now() - t0).count(); sink += h.sum; }
+    { DecodeAll h; const auto t0 = clk::now(); parse_stream(buf.data(), have, h); t_decode += std::chrono::duration<double>(clk::now() - t0).count(); sink += h.sum; }
+    const auto t0 = clk::now();
+    const StreamResult r = parse_stream(buf.data(), have, *book);
+    t_book += std::chrono::duration<double>(clk::now() - t0).count();
+    for (std::size_t off = 0; off < r.consumed;) {
+      const std::size_t len = be16(buf.data() + off);
+      const std::uint64_t a = tsc_begin();
+      dispatch(buf.data() + off + 2, len, *lat_book);
+      const std::uint64_t b = tsc_end();
+      const std::uint64_t d = b - a > overhead ? b - a - overhead : 0;
+      ++hist[d < HB - 1 ? d : HB - 1];
+      off += 2 + len;
+    }
+    msgs += r.messages; errors += r.errors; bytes += r.consumed;
+    std::memmove(buf.data(), buf.data() + r.consumed, have - r.consumed);
+    have -= r.consumed;
+    std::fprintf(stderr, "  %.1f GB, %llu M messages, %zu live orders\r", static_cast<double>(bytes) / 1e9,
+                 static_cast<unsigned long long>(msgs / 1000000), book->live_orders());
+  }
+  std::fclose(f);
+  auto pct = [&](double q) {
+    const std::uint64_t target = static_cast<std::uint64_t>(q * static_cast<double>(msgs - 1));
+    std::uint64_t c = 0;
+    for (std::size_t i = 0; i < HB; ++i) { c += hist[i]; if (c > target) return static_cast<double>(i) / tsc_per_ns; }
+    return static_cast<double>(HB) / tsc_per_ns;
+  };
+  std::printf("\n%s: %llu messages, %.2f GB, %llu parse errors | cpu %d%s | TSC %.3f GHz\n\n", path,
+              static_cast<unsigned long long>(msgs), static_cast<double>(bytes) / 1e9,
+              static_cast<unsigned long long>(errors), cpu, pinned ? " (pinned)" : "", tsc_per_ns);
+  line("framing + dispatch", msgs, bytes, t_frame);
+  line("full field decode", msgs, bytes, t_decode);
+  line("parse + book update", msgs, bytes, t_book);
+  std::printf("\n  parse + book, per message  p50 %7.0f ns | p90 %7.0f ns | p99 %7.0f ns | p99.9 %8.0f ns\n", pct(0.5),
+              pct(0.9), pct(0.99), pct(0.999));
+  const BookStats& st = book->stats();
+  std::printf("\nbook: %llu adds, %llu executions, %llu cancels, %llu deletes, %llu replaces, %llu unknown refs, %zu live orders at end\n",
+              static_cast<unsigned long long>(st.adds), static_cast<unsigned long long>(st.executions),
+              static_cast<unsigned long long>(st.cancels), static_cast<unsigned long long>(st.deletes),
+              static_cast<unsigned long long>(st.replaces), static_cast<unsigned long long>(st.unknown_ref),
+              book->live_orders());
+  // A correct rebuild of the exchange's displayed book is never crossed.
+  std::size_t symbols = 0, two_sided = 0, crossed = 0;
+  for (std::uint32_t loc = 0; loc < 65536; ++loc) {
+    const auto l = static_cast<std::uint16_t>(loc);
+    if (!book->known(l)) continue;
+    ++symbols;
+    const TopOfBook& t = book->top(l);
+    if (t.bid_price && t.ask_price) { ++two_sided; crossed += t.bid_price >= t.ask_price; }
+  }
+  std::printf("symbols: %zu in directory, %zu with both sides at end, %zu crossed\n", symbols, two_sided, crossed);
+  if (sink == 42) std::printf(" ");
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -87,6 +165,8 @@ int main(int argc, char** argv) {
       std::memcpy(data.data() + off + 2, m, len);
     });
     source = "synthetic (" + std::to_string(cfg.stocks) + " stocks)";
+  } else if (argc > 2 && std::strcmp(argv[1], "--stream") == 0) {
+    return stream_bench(argv[2], argc > 3 ? std::atoi(argv[3]) : 2);
   } else if (argc > 1) {
     if (!read_file(argv[1], data)) {
       std::fprintf(stderr, "cannot read %s\n", argv[1]);

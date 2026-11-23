@@ -25,7 +25,19 @@ Measured on a laptop (Intel Core i7-8565U, Windows 11, g++ 15.2 `-O3 -march=nati
 | Full field decode of every order message | 104 M msgs/s | 9.6 ns |
 | Parse + rebuild every symbol's book | **15.9 M msgs/s** | 63 ns |
 
-Per-message latency of parse + book update, timed individually with `rdtsc`/`rdtscp` (timer overhead subtracted):
+**Real data: a full Nasdaq trading day** (30 Jan 2019 public sample, 11.25 GB, streamed in 1 GB chunks, disk reads not timed):
+
+| Stage | Throughput | Per message |
+|---|---|---|
+| Framing + dispatch | **210 M msgs/s** (6.4 GB/s) | 4.75 ns |
+| Full field decode | 91 M msgs/s | 11.0 ns |
+| Parse + rebuild every symbol's book | **6.2 M msgs/s** | 161 ns (p50 164, p99 715, p99.9 1,231) |
+
+All **368.4M messages** parsed with **0 errors**. Books for all 8,713 symbols in the stock directory were rebuilt with **0 unknown order references**: every execute, cancel, delete, and replace matched a live order. **0 orders were left resting** after the close, so every order in the day is accounted for. The book rebuild is about 2.5x slower than on synthetic data because a real day holds far more live orders, so the order table spills out of cache; parsing speed carries over.
+
+Reproduce: `gunzip 01302019.NASDAQ_ITCH50.gz && ./build/bench_parse --stream 01302019.NASDAQ_ITCH50`
+
+Synthetic session, per-message latency of parse + book update, timed individually with `rdtsc`/`rdtscp` (timer overhead subtracted):
 
 | p50 | p90 | p99 | p99.9 |
 |---|---|---|---|
@@ -42,7 +54,7 @@ End to end over real UDP on the same machine, replay server to feed handler, wit
 
 **Caveats, stated plainly:**
 
-- These numbers come from synthetic data. A real full-day Nasdaq file has more symbols (about 8,000) and far more live orders, so the order table spills out of cache more and the book rebuild will be slower. The parser numbers should carry over.
+- The synthetic tables above use generated sessions; the real-day table shows the cost of a real order population.
 - On Windows, loopback multicast sends cap the replay at about 0.5M msgs/s, so the end-to-end runs measure the network path, not the handler.
 
 ## How it works
@@ -148,6 +160,6 @@ demo/                    WebAssembly build and the interactive site
 
 ## Next steps
 
-- Benchmark on a real full-day capture and publish those numbers next to the synthetic ones.
+- Speed up the book rebuild on real data (161 ns/msg): huge pages for the order table, and a hot/cold split of levels.
 - Busy-poll receive and kernel-bypass options (recvmmsg batching, then AF_XDP) on Linux.
 - Feed top-of-book updates into the [matching engine](https://github.com/abhiraj-kale/low-latency-order-book) to drive it with market-shaped flow.
